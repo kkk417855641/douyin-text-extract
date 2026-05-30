@@ -1,5 +1,5 @@
 """
-抖音收藏夹自动提取工具
+douyin-text-extract: 抖音收藏夹批量提取工具
 
 自动登录抖音，抓取收藏夹中的视频，下载并转录为文字，
 生成汇总文档和知识卡片。
@@ -8,76 +8,29 @@
     python favorites.py                   交互式选择收藏夹视频
     python favorites.py --all             自动处理所有收藏
     python favorites.py --limit 10        只处理最近 10 个
+    python favorites.py --select 1,3,5    指定处理第 1,3,5 个
     python favorites.py --login           仅登录并保存状态
 """
 
 import sys
 import re
 import time
-import json
 from datetime import datetime
 from pathlib import Path
 
-VALID_MODELS = ("tiny", "base", "small", "medium", "large")
-
-
-def safe_print(text: str):
-    """安全打印，处理编码问题"""
-    try:
-        print(text)
-    except UnicodeEncodeError:
-        # 替换 emoji 和其他无法编码的字符
-        import re
-        # 移除 emoji 字符
-        clean_text = re.sub(r'[\U0001F000-\U0001FFFF]', '', text)
-        try:
-            print(clean_text)
-        except UnicodeEncodeError:
-            # 如果还是不行，用 ASCII 替换
-            print(clean_text.encode('ascii', errors='replace').decode('ascii'))
-OUTPUT_DIR = Path(__file__).parent / "output"
-AUTH_DIR = Path(__file__).parent / ".auth"
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+from common import (
+    VALID_MODELS, OUTPUT_DIR, AUTH_DIR, USER_AGENT,
+    check_dependencies, sanitize_filename, safe_print,
+    create_browser_context, download_video, transcribe,
 )
 
 
-def check_dependencies():
-    """检查依赖"""
-    missing = []
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        missing.append("playwright")
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        missing.append("faster-whisper")
-    try:
-        import httpx
-    except ImportError:
-        missing.append("httpx")
-
-    if missing:
-        print("缺少以下依赖，请先安装:")
-        for dep in missing:
-            print(f"  pip install {dep}")
-        if "playwright" in missing:
-            print("  python -m playwright install chromium")
-        sys.exit(1)
-
-
-def sanitize_filename(name: str, max_len: int = 80) -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
-    name = name.strip('. ')
-    return name[:max_len] if name else "untitled"
-
+# ============================================================
+# 登录
+# ============================================================
 
 def login_and_save():
-    """打开浏览器让用户登录，保存登录状态"""
+    """打开浏览器让用户登录，自动检测登录成功后保存状态"""
     from playwright.sync_api import sync_playwright
 
     AUTH_DIR.mkdir(exist_ok=True)
@@ -86,28 +39,25 @@ def login_and_save():
     print("登录成功后会自动保存状态，浏览器会自动关闭。\n")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(
-            user_agent=USER_AGENT,
-            locale="zh-CN",
-            storage_state=str(AUTH_DIR / "state.json") if (AUTH_DIR / "state.json").exists() else None,
-        )
+        browser, context = create_browser_context(p, headless=False)
         page = context.new_page()
         page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
 
-        # 等待用户登录（检测头像或用户信息出现）
+        # 等待用户登录
         print("等待登录中...")
         logged_in = False
         for _ in range(120):  # 最多等 2 分钟
             time.sleep(2)
             try:
-                # 检测登录成功的标志：页面上有用户头像或"我"的入口
-                avatar = page.query_selector('[class*="avatar"], [class*="Avatar"], [data-e2e="user-info"]')
+                avatar = page.query_selector(
+                    '[class*="avatar"], [class*="Avatar"], [data-e2e="user-info"]'
+                )
                 if avatar:
                     logged_in = True
                     break
-                # 也检查 URL 变化（登录后可能跳转）
-                if "login" not in page.url and page.query_selector('[class*="profile"], [class*="Profile"]'):
+                if "login" not in page.url and page.query_selector(
+                    '[class*="profile"], [class*="Profile"]'
+                ):
                     logged_in = True
                     break
             except Exception:
@@ -118,7 +68,6 @@ def login_and_save():
         else:
             print("等待超时，尝试保存当前状态...")
 
-        # 保存登录状态
         context.storage_state(path=str(AUTH_DIR / "state.json"))
         print(f"登录状态已保存到: {AUTH_DIR / 'state.json'}")
         browser.close()
@@ -126,21 +75,9 @@ def login_and_save():
     return True
 
 
-def get_browser_context(playwright):
-    """获取带有登录状态的浏览器上下文"""
-    from playwright.sync_api import sync_playwright
-
-    AUTH_DIR.mkdir(exist_ok=True)
-    state_file = AUTH_DIR / "state.json"
-
-    browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context(
-        user_agent=USER_AGENT,
-        locale="zh-CN",
-        storage_state=str(state_file) if state_file.exists() else None,
-    )
-    return browser, context
-
+# ============================================================
+# 收藏夹抓取
+# ============================================================
 
 def scrape_favorites(limit: int = 0) -> list:
     """抓取收藏夹视频列表
@@ -162,12 +99,15 @@ def scrape_favorites(limit: int = 0) -> list:
     videos = []
 
     with sync_playwright() as p:
-        browser, context = get_browser_context(p)
+        browser, context = create_browser_context(p)
         page = context.new_page()
 
         # 访问收藏夹页面
-        page.goto("https://www.douyin.com/user/self?showTab=favorite",
-                   wait_until="domcontentloaded", timeout=30000)
+        page.goto(
+            "https://www.douyin.com/user/self?showTab=favorite",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
         time.sleep(5)
 
         # 检查是否登录成功
@@ -180,13 +120,11 @@ def scrape_favorites(limit: int = 0) -> list:
         print("正在加载收藏列表...")
         prev_count = 0
         no_new_count = 0
-        max_scrolls = 100
 
-        for i in range(max_scrolls):
+        for _ in range(100):  # 最多滚动 100 次
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(2)
 
-            # 统计视频链接数量
             links = page.query_selector_all('a[href*="/video/"]')
             seen = set()
             for link in links:
@@ -209,10 +147,9 @@ def scrape_favorites(limit: int = 0) -> list:
             if limit > 0 and current_count >= limit:
                 break
 
-        # 提取视频信息（直接从链接提取）
+        # 提取视频信息
         print("正在提取视频信息...")
         seen_ids = set()
-
         links = page.query_selector_all('a[href*="/video/"]')
 
         for link in links:
@@ -229,22 +166,14 @@ def scrape_favorites(limit: int = 0) -> list:
 
                 # 从链接文本提取标题
                 title = link.inner_text().strip()
-                # 清理标题（去掉多余空白和特殊字符）
                 title = re.sub(r'\s+', ' ', title).strip()
                 if not title or len(title) < 3:
                     title = f"视频_{video_id}"
 
-                # 尝试从 URL 参数提取来源
-                author = ""
-                source_match = re.search(r'source=([^&]+)', href)
-                if source_match:
-                    author = source_match.group(1)
-
                 url = f"https://www.douyin.com/video/{video_id}"
                 videos.append({
                     "id": video_id,
-                    "title": title[:100],  # 限制标题长度
-                    "author": author,
+                    "title": title[:100],
                     "url": url,
                 })
 
@@ -260,86 +189,18 @@ def scrape_favorites(limit: int = 0) -> list:
     return videos
 
 
-def download_video(url: str) -> str:
-    """用 Playwright 下载单个视频"""
-    import httpx
-    from playwright.sync_api import sync_playwright
-
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    video_url = None
-    video_title = "douyin_video"
-
-    with sync_playwright() as p:
-        browser, context = get_browser_context(p)
-        page = context.new_page()
-
-        def handle_response(response):
-            nonlocal video_url
-            resp_url = response.url
-            content_type = response.headers.get("content-type", "")
-            if ("video" in content_type or ".mp4" in resp_url) and any(
-                kw in resp_url for kw in ("douyinvod", "v26", "v3-web")
-            ):
-                video_url = resp_url
-
-        page.on("response", handle_response)
-
-        try:
-            page.goto(url, wait_until="networkidle", timeout=30000)
-        except Exception:
-            pass
-
-        time.sleep(3)
-
-        try:
-            video_title = sanitize_filename(page.title())
-        except Exception:
-            pass
-
-        browser.close()
-
-    if not video_url:
-        print("  无法提取视频URL")
-        return None
-
-    output_path = OUTPUT_DIR / f"{video_title}.mp4"
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Referer": "https://www.douyin.com/",
-    }
-
-    with httpx.Client(follow_redirects=True, timeout=60) as client:
-        with client.stream("GET", video_url, headers=headers) as resp:
-            resp.raise_for_status()
-            with open(output_path, "wb") as f:
-                for chunk in resp.iter_bytes(8192):
-                    f.write(chunk)
-
-    return str(output_path)
-
-
-def transcribe(video_path: str, model_size: str = "medium") -> str:
-    """用 faster-whisper 转录视频"""
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(video_path, language="zh", beam_size=5, vad_filter=True)
-
-    full_text = []
-    for segment in segments:
-        full_text.append(segment.text)
-
-    return "\n".join(full_text)
-
+# ============================================================
+# 汇总文档生成
+# ============================================================
 
 def generate_summary(results: list, output_dir: Path):
-    """生成汇总 Markdown 文档"""
+    """生成汇总 Markdown 文档和知识卡片"""
     output_dir.mkdir(exist_ok=True)
 
-    # 汇总文档
+    # --- 汇总文档 ---
     summary_path = output_dir / "收藏夹汇总.md"
     lines = [
-        f"# 抖音收藏夹汇总\n",
+        "# 抖音收藏夹汇总\n",
         f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n",
         f"共 {len(results)} 个视频\n",
         "---\n",
@@ -347,8 +208,6 @@ def generate_summary(results: list, output_dir: Path):
 
     for i, r in enumerate(results, 1):
         lines.append(f"## {i}. {r['title']}\n")
-        if r.get("author"):
-            lines.append(f"**作者**: {r['author']}\n")
         lines.append(f"**链接**: {r['url']}\n")
         lines.append(f"\n{r['transcript']}\n")
         lines.append("\n---\n")
@@ -356,28 +215,25 @@ def generate_summary(results: list, output_dir: Path):
     summary_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"汇总文档已保存: {summary_path}")
 
-    # 知识卡片
+    # --- 知识卡片 ---
     cards_path = output_dir / "知识卡片.md"
     cards = [
-        f"# 抖音知识卡片\n",
+        "# 抖音知识卡片\n",
         f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n",
         "---\n",
     ]
 
     for i, r in enumerate(results, 1):
-        cards.append(f"## 📌 {r['title']}\n")
-        if r.get("author"):
-            cards.append(f"**来源**: {r['author']} | [原视频]({r['url']})\n")
-        else:
-            cards.append(f"**来源**: [原视频]({r['url']})\n")
+        cards.append(f"## {i}. {r['title']}\n")
+        cards.append(f"**来源**: [原视频]({r['url']})\n")
 
-        # 提取要点（简单方式：按句号/逗号分句，取关键句）
+        # 提取要点：按句号/问号/感叹号分句，取关键句
         text = r["transcript"]
         sentences = re.split(r'[。！？\n]', text)
         sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
 
         cards.append("\n**核心要点**:\n")
-        for s in sentences[:8]:  # 最多取8句
+        for s in sentences[:8]:
             cards.append(f"- {s}")
         cards.append("")
         cards.append("---\n")
@@ -386,9 +242,13 @@ def generate_summary(results: list, output_dir: Path):
     print(f"知识卡片已保存: {cards_path}")
 
 
+# ============================================================
+# 帮助
+# ============================================================
+
 def print_help():
     print(
-        """抖音收藏夹自动提取工具
+        """抖音收藏夹批量提取工具
 
 用法:
     python favorites.py                       交互式选择收藏夹视频
@@ -408,6 +268,10 @@ def print_help():
     )
 
 
+# ============================================================
+# 主函数
+# ============================================================
+
 def main():
     args = sys.argv[1:]
 
@@ -422,7 +286,6 @@ def main():
     limit = 0
     login_only = False
     auto_all = False
-
     select_str = None
 
     i = 0
@@ -471,15 +334,13 @@ def main():
     if not auto_all and limit == 0:
         print("\n收藏视频列表:")
         for idx, v in enumerate(videos, 1):
-            author_str = f" - {v['author']}" if v['author'] else ""
-            safe_print(f"  {idx}. {v['title']}{author_str}")
+            safe_print(f"  {idx}. {v['title']}")
 
-        # 如果通过 --select 指定了选择，使用它
         if select_str:
             choice = select_str
             safe_print(f"\n使用 --select 参数: {choice}")
         else:
-            print(f"\n输入要处理的视频编号（如 1,3,5 或 all）:")
+            print("\n输入要处理的视频编号（如 1,3,5 或 all）:")
             choice = input(">> ").strip()
 
         if choice.lower() == "all":
@@ -505,29 +366,25 @@ def main():
         safe_print(f"[{idx}/{len(selected)}] {video['title']}")
 
         try:
-            # 下载
             print("  下载中...")
-            video_path = download_video(video["url"])
+            video_path = download_video(video["url"], use_auth=True)
             if not video_path:
                 print("  下载失败，跳过")
                 continue
 
-            # 转录
             print("  转录中...")
-            transcript = transcribe(video_path, model_size)
+            transcript = transcribe(video_path, model_size, verbose=False)
 
             if transcript.strip():
-                # 保存单个文案
                 txt_path = OUTPUT_DIR / f"{sanitize_filename(video['title'])}.txt"
                 txt_path.write_text(transcript, encoding="utf-8")
 
                 results.append({
                     "title": video["title"],
-                    "author": video.get("author", ""),
                     "url": video["url"],
                     "transcript": transcript,
                 })
-                print(f"  完成 ✓")
+                print("  完成 ✓")
             else:
                 print("  未识别到文字内容")
 

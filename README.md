@@ -78,6 +78,7 @@ python favorites.py --limit 10
 
 ```
 douyin-extract/
+├── common.py           # 公共模块（下载、转录、工具函数）
 ├── extract.py          # 单视频提取
 ├── favorites.py        # 收藏夹批量提取
 ├── requirements.txt    # Python 依赖
