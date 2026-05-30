@@ -54,6 +54,19 @@ python favorites.py --all
 python favorites.py --limit 10
 ```
 
+### 4. 并行批量提取（更快）
+
+```bash
+# 并行处理，3倍速度
+python batch_extract.py --select 1-10 --workers 3
+
+# 处理所有收藏
+python batch_extract.py --all --workers 5
+
+# 指定视频编号
+python batch_extract.py --select 1,5,10-20
+```
+
 #### 输出文件
 
 | 文件 | 说明 |
@@ -80,7 +93,8 @@ python favorites.py --limit 10
 douyin-extract/
 ├── common.py           # 公共模块（下载、转录、工具函数）
 ├── extract.py          # 单视频提取
-├── favorites.py        # 收藏夹批量提取
+├── favorites.py        # 收藏夹批量提取（交互式）
+├── batch_extract.py    # 收藏夹批量提取（并行版，更快）
 ├── requirements.txt    # Python 依赖
 ├── README.md           # 项目说明
 ├── LICENSE             # MIT 开源协议
