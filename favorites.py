@@ -19,6 +19,22 @@ from datetime import datetime
 from pathlib import Path
 
 VALID_MODELS = ("tiny", "base", "small", "medium", "large")
+
+
+def safe_print(text: str):
+    """安全打印，处理编码问题"""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # 替换 emoji 和其他无法编码的字符
+        import re
+        # 移除 emoji 字符
+        clean_text = re.sub(r'[\U0001F000-\U0001FFFF]', '', text)
+        try:
+            print(clean_text)
+        except UnicodeEncodeError:
+            # 如果还是不行，用 ASCII 替换
+            print(clean_text.encode('ascii', errors='replace').decode('ascii'))
 OUTPUT_DIR = Path(__file__).parent / "output"
 AUTH_DIR = Path(__file__).parent / ".auth"
 
@@ -67,7 +83,7 @@ def login_and_save():
     AUTH_DIR.mkdir(exist_ok=True)
 
     print("正在打开浏览器，请登录你的抖音账号...")
-    print("登录完成后，按回车键继续...")
+    print("登录成功后会自动保存状态，浏览器会自动关闭。\n")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -79,7 +95,28 @@ def login_and_save():
         page = context.new_page()
         page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
 
-        input(">> 登录完成后按回车...")
+        # 等待用户登录（检测头像或用户信息出现）
+        print("等待登录中...")
+        logged_in = False
+        for _ in range(120):  # 最多等 2 分钟
+            time.sleep(2)
+            try:
+                # 检测登录成功的标志：页面上有用户头像或"我"的入口
+                avatar = page.query_selector('[class*="avatar"], [class*="Avatar"], [data-e2e="user-info"]')
+                if avatar:
+                    logged_in = True
+                    break
+                # 也检查 URL 变化（登录后可能跳转）
+                if "login" not in page.url and page.query_selector('[class*="profile"], [class*="Profile"]'):
+                    logged_in = True
+                    break
+            except Exception:
+                continue
+
+        if logged_in:
+            print("检测到登录成功！")
+        else:
+            print("等待超时，尝试保存当前状态...")
 
         # 保存登录状态
         context.storage_state(path=str(AUTH_DIR / "state.json"))
@@ -143,58 +180,70 @@ def scrape_favorites(limit: int = 0) -> list:
         print("正在加载收藏列表...")
         prev_count = 0
         no_new_count = 0
-        max_scrolls = 50  # 最多滚动50次
+        max_scrolls = 100
 
         for i in range(max_scrolls):
-            # 滚动到底部
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(2)
 
-            # 提取视频卡片
-            cards = page.query_selector_all('div[class*="DyOneListItem"], a[href*="/video/"]')
+            # 统计视频链接数量
+            links = page.query_selector_all('a[href*="/video/"]')
+            seen = set()
+            for link in links:
+                href = link.get_attribute("href") or ""
+                match = re.search(r'/video/(\d+)', href)
+                if match:
+                    seen.add(match.group(1))
 
-            current_count = len(cards)
+            current_count = len(seen)
             if current_count == prev_count:
                 no_new_count += 1
-                if no_new_count >= 3:
+                if no_new_count >= 5:
                     break
             else:
                 no_new_count = 0
+                if current_count % 10 == 0 or current_count > prev_count + 5:
+                    print(f"  已加载 {current_count} 个视频...")
             prev_count = current_count
 
             if limit > 0 and current_count >= limit:
                 break
 
-            print(f"  已加载 {current_count} 个视频...")
+        # 提取视频信息（直接从链接提取）
+        print("正在提取视频信息...")
+        seen_ids = set()
 
-        # 提取视频信息
-        cards = page.query_selector_all('a[href*="/video/"]')
-        seen_urls = set()
+        links = page.query_selector_all('a[href*="/video/"]')
 
-        for card in cards:
+        for link in links:
             try:
-                href = card.get_attribute("href") or ""
+                href = link.get_attribute("href") or ""
                 video_match = re.search(r'/video/(\d+)', href)
                 if not video_match:
                     continue
 
                 video_id = video_match.group(1)
-                if video_id in seen_urls:
+                if video_id in seen_ids:
                     continue
-                seen_urls.add(video_id)
+                seen_ids.add(video_id)
 
-                # 提取标题
-                title_el = card.query_selector('[class*="title"], [class*="desc"], p, span')
-                title = title_el.inner_text().strip() if title_el else f"视频_{video_id}"
+                # 从链接文本提取标题
+                title = link.inner_text().strip()
+                # 清理标题（去掉多余空白和特殊字符）
+                title = re.sub(r'\s+', ' ', title).strip()
+                if not title or len(title) < 3:
+                    title = f"视频_{video_id}"
 
-                # 提取作者
-                author_el = card.query_selector('[class*="author"], [class*="nickname"]')
-                author = author_el.inner_text().strip() if author_el else ""
+                # 尝试从 URL 参数提取来源
+                author = ""
+                source_match = re.search(r'source=([^&]+)', href)
+                if source_match:
+                    author = source_match.group(1)
 
                 url = f"https://www.douyin.com/video/{video_id}"
                 videos.append({
                     "id": video_id,
-                    "title": title,
+                    "title": title[:100],  # 限制标题长度
                     "author": author,
                     "url": url,
                 })
@@ -342,16 +391,19 @@ def print_help():
         """抖音收藏夹自动提取工具
 
 用法:
-    python favorites.py                   交互式选择收藏夹视频
-    python favorites.py --all             自动处理所有收藏
-    python favorites.py --limit 10        只处理最近 10 个
-    python favorites.py --login           仅登录并保存状态
+    python favorites.py                       交互式选择收藏夹视频
+    python favorites.py --all                 自动处理所有收藏
+    python favorites.py --limit 10            只处理最近 10 个
+    python favorites.py --select 1,3,5        指定处理第 1,3,5 个
+    python favorites.py --select 1-50         指定处理第 1-50 个
+    python favorites.py --login               仅登录并保存状态
 
 选项:
     --model <size>   语音模型大小 (默认 medium)
     --login          仅登录并保存状态，不提取
     --all            处理所有收藏视频
     --limit <n>      限制处理数量
+    --select <ids>   指定要处理的视频编号 (如 1,3,5 或 1-10)
     --help           显示此帮助"""
     )
 
@@ -371,6 +423,8 @@ def main():
     login_only = False
     auto_all = False
 
+    select_str = None
+
     i = 0
     while i < len(args):
         if args[i] == "--model" and i + 1 < len(args):
@@ -378,6 +432,9 @@ def main():
             i += 2
         elif args[i] == "--limit" and i + 1 < len(args):
             limit = int(args[i + 1])
+            i += 2
+        elif args[i] == "--select" and i + 1 < len(args):
+            select_str = args[i + 1]
             i += 2
         elif args[i] == "--login":
             login_only = True
@@ -415,10 +472,15 @@ def main():
         print("\n收藏视频列表:")
         for idx, v in enumerate(videos, 1):
             author_str = f" - {v['author']}" if v['author'] else ""
-            print(f"  {idx}. {v['title']}{author_str}")
+            safe_print(f"  {idx}. {v['title']}{author_str}")
 
-        print(f"\n输入要处理的视频编号（如 1,3,5 或 all）:")
-        choice = input(">> ").strip()
+        # 如果通过 --select 指定了选择，使用它
+        if select_str:
+            choice = select_str
+            safe_print(f"\n使用 --select 参数: {choice}")
+        else:
+            print(f"\n输入要处理的视频编号（如 1,3,5 或 all）:")
+            choice = input(">> ").strip()
 
         if choice.lower() == "all":
             selected = videos
@@ -440,7 +502,7 @@ def main():
     # 处理每个视频
     results = []
     for idx, video in enumerate(selected, 1):
-        print(f"[{idx}/{len(selected)}] {video['title']}")
+        safe_print(f"[{idx}/{len(selected)}] {video['title']}")
 
         try:
             # 下载
