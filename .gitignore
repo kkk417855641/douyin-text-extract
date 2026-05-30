@@ -1,6 +1,9 @@
 # Output files (downloaded videos and transcripts)
 output/
 
+# Auth state (login cookies, DO NOT commit)
+.auth/
+
 # Python
 __pycache__/
 *.py[cod]

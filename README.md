@@ -2,6 +2,10 @@
 
 抖音视频文案提取工具 — 输入抖音链接，自动下载视频并转录为文字。
 
+支持两种模式：
+- **单视频模式** — 输入链接，提取单个视频文案
+- **收藏夹模式** — 自动抓取抖音收藏夹，批量提取并生成汇总
+
 ## 工作原理
 
 1. **Playwright** 自动化浏览器访问抖音页面，拦截视频流请求
@@ -19,7 +23,7 @@ python -m playwright install chromium
 
 > ffmpeg 也需要安装。Windows 用户可使用 `winget install Gyan.FFmpeg`
 
-### 2. 使用
+### 2. 单视频提取
 
 ```bash
 # 从抖音链接提取文案
@@ -32,9 +36,31 @@ python extract.py --file video.mp4
 python extract.py https://v.douyin.com/xxxxx/ --model small
 ```
 
-### 3. 输出
-
 转录结果保存在 `output/` 目录下，以视频标题命名的 `.txt` 文件。
+
+### 3. 收藏夹批量提取
+
+```bash
+# 首次使用：登录并保存状态
+python favorites.py --login
+
+# 交互式选择视频
+python favorites.py
+
+# 自动处理所有收藏
+python favorites.py --all
+
+# 只处理最近 10 个
+python favorites.py --limit 10
+```
+
+#### 输出文件
+
+| 文件 | 说明 |
+|------|------|
+| `output/视频标题.txt` | 每个视频的单独文案 |
+| `output/收藏夹汇总.md` | 所有视频文案汇总（含标题、作者、链接） |
+| `output/知识卡片.md` | 每个视频的核心要点提取 |
 
 ## 语音模型选择
 
@@ -52,15 +78,19 @@ python extract.py https://v.douyin.com/xxxxx/ --model small
 
 ```
 douyin-extract/
-├── extract.py          # 主程序
+├── extract.py          # 单视频提取
+├── favorites.py        # 收藏夹批量提取
 ├── requirements.txt    # Python 依赖
 ├── README.md           # 项目说明
 ├── LICENSE             # MIT 开源协议
+├── .auth/              # 登录状态 (自动创建，不会上传)
 └── output/             # 输出目录 (自动创建)
 ```
 
 ## 注意事项
 
+- 首次运行收藏夹功能需要登录抖音账号
+- 登录状态保存在 `.auth/` 目录，不会上传到 GitHub
 - 首次运行需要下载 Whisper 模型，请耐心等待
 - 中文视频建议使用 `medium` 或 `large` 模型
 - 背景音乐可能影响识别准确度
