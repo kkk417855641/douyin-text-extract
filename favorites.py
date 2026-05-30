@@ -102,9 +102,9 @@ def scrape_favorites(limit: int = 0) -> list:
         browser, context = create_browser_context(p)
         page = context.new_page()
 
-        # 访问收藏夹页面
+        # 访问收藏页面
         page.goto(
-            "https://www.douyin.com/user/self?showTab=favorite",
+            "https://www.douyin.com/user/self?showTab=favorite_collection",
             wait_until="domcontentloaded",
             timeout=30000,
         )
