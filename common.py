@@ -14,7 +14,7 @@ from pathlib import Path
 # ============================================================
 
 VALID_MODELS = ("tiny", "base", "small", "medium", "large")
-OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR = Path("F:/douyin-extract-output")
 AUTH_DIR = Path(__file__).parent / ".auth"
 
 USER_AGENT = (
