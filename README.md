@@ -67,6 +67,25 @@ python batch_extract.py --all --workers 5
 python batch_extract.py --select 1,5,10-20
 ```
 
+### 5. 内容收集到 Obsidian（一键整理）
+
+```bash
+# 从抖音链接提取并整理到 Obsidian
+python to_obsidian.py https://v.douyin.com/xxxxx/
+
+# 从本地视频整理
+python to_obsidian.py --file video.mp4
+
+# 直接整理文本内容
+python to_obsidian.py --text "你的笔记内容" --title "笔记标题" --tags "标签1,标签2"
+```
+
+功能特点：
+- 自动提取核心观点
+- 自动查找相关笔记并添加双向链接
+- 自动生成元数据（标签、来源、时间）
+- 直接保存到 Obsidian 知识库
+
 #### 输出文件
 
 | 文件 | 说明 |
