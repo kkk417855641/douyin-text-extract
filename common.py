@@ -231,6 +231,16 @@ def download_video(url: str, use_auth: bool = False) -> str:
 # 语音转录
 # ============================================================
 
+def _t2s(text: str) -> str:
+    """繁体中文转简体中文"""
+    try:
+        import opencc
+        converter = opencc.OpenCC('t2s')
+        return converter.convert(text)
+    except ImportError:
+        return text
+
+
 def transcribe(video_path: str, model_size: str = "medium", verbose: bool = True) -> str:
     """用 faster-whisper 将视频音频转录为文字
 
@@ -240,7 +250,7 @@ def transcribe(video_path: str, model_size: str = "medium", verbose: bool = True
         verbose: 是否打印转录过程
 
     Returns:
-        转录后的完整文本
+        转录后的完整文本（简体中文）
     """
     from faster_whisper import WhisperModel
 
@@ -261,10 +271,12 @@ def transcribe(video_path: str, model_size: str = "medium", verbose: bool = True
 
     full_text = []
     for segment in segments:
+        # 繁体转简体
+        text = _t2s(segment.text)
         if verbose:
-            line = f"[{segment.start:.1f}s - {segment.end:.1f}s] {segment.text}"
+            line = f"[{segment.start:.1f}s - {segment.end:.1f}s] {text}"
             safe_print(line)
-        full_text.append(segment.text)
+        full_text.append(text)
 
     return "\n".join(full_text)
 
