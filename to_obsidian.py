@@ -13,10 +13,23 @@
 """
 
 import sys
+import os
 import re
 import hashlib
 from pathlib import Path
 from datetime import datetime
+
+# Windows 终端编码修复
+if sys.platform == 'win32':
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+    try:
+        os.system('chcp 65001 > nul 2>&1')
+    except Exception:
+        pass
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # Obsidian vault 路径
 OBSIDIAN_VAULT = Path(r"C:\Users\sunyan\Documents\Obsidian Vault")
