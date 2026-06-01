@@ -5,9 +5,33 @@ douyin-text-extract: 公共模块
 """
 
 import sys
+import os
 import re
 import time
 from pathlib import Path
+
+# ============================================================
+# Windows 终端编码修复
+# ============================================================
+
+def setup_encoding():
+    """设置 Windows 终端为 UTF-8 编码，解决中文乱码问题"""
+    if sys.platform == 'win32':
+        # 设置环境变量
+        os.environ['PYTHONIOENCODING'] = 'utf-8'
+        # 尝试设置控制台代码页
+        try:
+            os.system('chcp 65001 > nul 2>&1')
+        except Exception:
+            pass
+        # 重新配置 stdout/stderr
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+# 启动时自动修复编码
+setup_encoding()
 
 # ============================================================
 # 常量
@@ -71,15 +95,19 @@ def sanitize_filename(name: str, max_len: int = 80) -> str:
 def safe_print(text: str):
     """安全打印，处理 Windows 终端 GBK 编码无法显示 emoji 等字符的问题"""
     try:
-        print(text)
+        print(text, flush=True)
     except UnicodeEncodeError:
         # 移除 emoji 和其他 Unicode 扩展字符
-        clean = re.sub(r'[\U0001F000-\U0001FFFF☀-➿⭐⭕]', '', text)
+        clean = re.sub(r'[\U0001F000-\U0001FFFF☀-➿⭐⭕✨🔥💯✅❌⚡🎯📌💡🔧🎨🎬📚💰🤖]', '', text)
         try:
-            print(clean)
+            print(clean, flush=True)
         except UnicodeEncodeError:
-            # 最后手段：用 ASCII 替换
-            print(clean.encode('ascii', errors='replace').decode('ascii'))
+            # 最后手段：用 UTF-8 编码写入
+            try:
+                sys.stdout.buffer.write((clean + '\n').encode('utf-8', errors='replace'))
+                sys.stdout.buffer.flush()
+            except Exception:
+                print(clean.encode('ascii', errors='replace').decode('ascii'))
 
 
 # ============================================================
